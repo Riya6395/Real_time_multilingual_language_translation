@@ -1,3 +1,4 @@
+
 import os
 import time
 import pygame
@@ -9,6 +10,9 @@ from googletrans import LANGUAGES, Translator
 from io import BytesIO
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
+import argostranslate.package
+import argostranslate.translate
+import concurrent.futures
 
 # Global flag to manage translation state
 isTranslateOn = False
@@ -24,10 +28,18 @@ def get_language_code(language_name):
     """Retrieve the language code for a given language name."""
     return language_mapping.get(language_name, language_name)
 
-def translator_function(spoken_text, from_language, to_language):
-    """Translate text from one language to another with error handling and increased timeout."""
+def offline_translate(text, from_lang, to_lang):
+    """Translate text using Argos Translate (Offline Mode)."""
     try:
-        if not spoken_text or spoken_text.strip() == "":
+        return argostranslate.translate.translate(text, from_lang, to_lang)
+    except Exception as e:
+        st.error(f"Offline Translation Failed: {e}")
+        return None
+
+def translator_function(spoken_text, from_language, to_language, max_retries=3):
+    """Translate text from one language to another with retry logic and better timeout handling."""
+    try:
+        if not spoken_text.strip():
             st.warning("No text provided for translation.")
             return None  
 
@@ -35,20 +47,29 @@ def translator_function(spoken_text, from_language, to_language):
             st.error("Invalid source or target language.")
             return None  
 
-        max_length = 500  # Adjust based on testing
+        max_length = 500  # ✅ Limit text size per request
         chunks = [spoken_text[i:i + max_length] for i in range(0, len(spoken_text), max_length)]
 
         translated_chunks = []
-        for chunk in chunks:
-            try:
-                translated_part = translator.translate(chunk, src=from_language, dest=to_language)
-                translated_chunks.append(translated_part.text if translated_part else "")
+        translator = Translator(service_urls=[
+            'translate.google.com',
+            'translate.google.co.in',
+            'translate.google.co.uk'
+        ])
 
-                time.sleep(0.5)  # ✅ Add a 2-second delay between requests (helps avoid blocking)
-                
-            except Exception as e:
-                st.error(f"Chunk Translation Failed: {e}")
-                translated_chunks.append("")  
+        for chunk in chunks:
+            for attempt in range(max_retries):  # ✅ Retry failed requests
+                try:
+                    translated_part = translator.translate(chunk, src=from_language, dest=to_language)
+                    translated_chunks.append(translated_part.text if translated_part else "")
+                    time.sleep(1)  # ✅ Small delay to prevent rate limiting
+                    break  # ✅ Exit retry loop if successful
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2)  # ✅ Wait before retrying
+                    else:
+                        st.error(f"Chunk Translation Failed after {max_retries} retries: {e}")
+                        translated_chunks.append("")  
 
         return "\n".join(translated_chunks)  
     except Exception as e:
